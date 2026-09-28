@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SmartStock</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+body{background:#050507;color:#fff;font-family:ui-sans-serif,system-ui,sans-serif}
+.glass{background:#121216cc;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid #27272a;border-radius:14px}
+@keyframes glow{0%,100%{border-color:#3f3f46;box-shadow:0 0 0 0 #fff0}50%{border-color:#fff;box-shadow:0 0 14px 0 #ffffff40}}
+.animate-glow{animation:glow 2s ease-in-out infinite}
+@keyframes beam{0%{background-position:0% 50%}100%{background-position:300% 50%}}
+.beam-card{background:linear-gradient(90deg,#121216,#3f3f46,#121216,#fafafa22,#121216);background-size:300% 100%;animation:beam 6s linear infinite}
+@media(prefers-reduced-motion:reduce){.animate-glow,.beam-card{animation:none}}
+#log{font-family:ui-monospace,monospace}
+</style>
+</head>
+<body class="min-h-screen p-4 md:p-8">
+<header class="flex items-center justify-between mb-6">
+  <div class="flex items-center gap-3"><i data-lucide="boxes" class="w-6 h-6"></i><h1 class="text-xl font-semibold tracking-tight">SmartStock</h1></div>
+  <div class="flex items-center gap-4 text-sm text-zinc-400">
+    <span class="flex items-center gap-2"><span class="w-2 h-2 rounded-full bg-white animate-pulse"></span><span id="ml-state">ML engine: connecting</span></span>
+    <button onclick="refresh()" class="border border-zinc-700 hover:bg-white hover:text-black rounded-lg px-3 py-1.5 transition flex items-center gap-2"><i data-lucide="refresh-cw" class="w-4 h-4"></i>Refresh</button>
+  </div>
+</header>
+<section class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6" id="metrics"></section>
+<div class="grid lg:grid-cols-3 gap-6">
+  <section class="glass p-5 lg:col-span-2 overflow-x-auto">
+    <h2 class="font-medium mb-4">Product inventory</h2>
+    <table class="w-full text-sm"><thead class="text-zinc-500 text-left"><tr><th class="pb-2">Product</th><th>SKU</th><th class="text-right">Stock</th><th class="text-right">Price</th><th class="text-right">7-day forecast</th><th class="text-right">Status</th></tr></thead><tbody id="rows"></tbody></table>
+    <div class="mt-6 h-56"><canvas id="chart"></canvas></div>
+  </section>
+  <div class="space-y-6">
+    <section class="glass beam-card p-5">
+      <h2 class="font-medium mb-4">Sales simulator</h2>
+      <select id="pos-product" class="w-full bg-black border border-zinc-700 rounded-lg p-2 mb-3"></select>
+      <input id="pos-qty" type="number" min="1" value="1" class="w-full bg-black border border-zinc-700 rounded-lg p-2 mb-3">
+      <button onclick="sell()" class="w-full bg-white text-black font-medium rounded-lg py-2 hover:bg-zinc-200 transition">Complete sale</button>
+    </section>
+    <section class="glass p-5">
+      <h2 class="font-medium mb-3">Auto-procurement log</h2>
+      <div id="log" class="h-64 overflow-y-auto text-xs text-zinc-400 space-y-1"></div>
+    </section>
+  </div>
+</div>
+<script>
+let token=null, products=[], chart;
+const $=id=>document.getElementById(id), money=n=>'$'+Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+function log(msg,hi){const d=document.createElement('div');d.className=hi?'text-white':'';d.textContent=`[${new Date().toLocaleTimeString()}] ${msg}`;$('log').prepend(d)}
+async function api(path,opts={}){
+  const r=await fetch('/api'+path,{...opts,headers:{...(opts.headers||{}),...(token?{Authorization:'Bearer '+token}:{})}});
+  const j=await r.json().catch(()=>({})); if(!r.ok) throw new Error(j.detail||r.statusText); return j;
+}
+async function login(){ // demo account is seeded on first start; swap for a real login form in production
+  const body=new URLSearchParams({username:'demo@smartstock.io',password:'demo1234'});
+  token=(await api('/auth/login',{method:'POST',body})).access_token;
+}
+async function refresh(){
+  try{
+    const [m,p]=await Promise.all([api('/metrics'),api('/products')]); products=p;
+    $('ml-state').textContent='ML engine: active (SES, α=0.35)';
+    $('metrics').innerHTML=[['Total revenue',money(m.revenue)],['Gross profit',money(m.gross_profit)],['Active SKUs',m.active_skus],['Low stock alerts',m.low_stock_alerts]]
+      .map(([l,v],i)=>`<div class="glass p-4 ${i==3&&m.low_stock_alerts?'animate-glow':''}"><div class="text-zinc-500 text-sm">${l}</div><div class="text-2xl font-semibold mt-1">${v}</div></div>`).join('');
+    $('rows').innerHTML=p.map(x=>`<tr class="border-t border-zinc-800"><td class="py-2.5">${x.name}</td><td class="text-zinc-400">${x.sku}</td><td class="text-right">${x.stock}</td><td class="text-right">${money(x.price)}</td><td class="text-right text-zinc-400">${x.forecast_7d}</td><td class="text-right"><span class="px-2 py-0.5 rounded-full text-xs border ${x.needs_reorder?'bg-white text-black border-white animate-glow':'border-zinc-700 text-zinc-400'}">${x.needs_reorder?'Reorder':'Healthy'}</span></td></tr>`).join('');
+    const sel=$('pos-product'),cur=sel.value; sel.innerHTML=p.map(x=>`<option value="${x.id}">${x.name} (${x.stock} in stock)</option>`).join(''); if(cur) sel.value=cur;
+    drawChart();
+  }catch(e){log('Error: '+e.message)}
+}
+function drawChart(){
+  const cfg={type:'bar',data:{labels:products.map(x=>x.sku),datasets:[{label:'Stock',data:products.map(x=>x.stock),backgroundColor:'#fff'},{label:'7-day forecast',data:products.map(x=>x.forecast_7d),backgroundColor:'#52525b'}]},
+    options:{maintainAspectRatio:false,scales:{x:{ticks:{color:'#a1a1aa'},grid:{color:'#27272a'}},y:{ticks:{color:'#a1a1aa'},grid:{color:'#27272a'}}},plugins:{legend:{labels:{color:'#a1a1aa'}}}}};
+  if(chart){chart.data=cfg.data;chart.update()}else chart=new Chart($('chart'),cfg);
+}
+async function sell(){
+  const product_id=+$('pos-product').value, quantity=+$('pos-qty').value;
+  try{
+    const r=await api('/sales',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({product_id,quantity})});
+    log(`SALE ${r.quantity} × ${r.product} → ${money(r.revenue)}, ${r.remaining_stock} left`);
+    if(r.purchase_order) log(`AUTO PO #${r.purchase_order.id}: order ${r.purchase_order.quantity} × ${r.product}`,true);
+    await refresh();
+  }catch(e){log('Sale failed: '+e.message)}
+}
+(async()=>{lucide.createIcons();try{await login();log('Session started');await refresh()}catch(e){$('ml-state').textContent='ML engine: offline';log('Login failed: '+e.message)}})();
+</script>
+</body>
+</html>

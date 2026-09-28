@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SmartStock</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>tailwind.config={darkMode:'class',theme:{extend:{fontFamily:{sans:['Schibsted Grotesk','ui-sans-serif','system-ui','sans-serif']}}}}</script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+body{background:#050507;color:#fff}
+.glass{background:rgba(18,18,22,.8);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid #27272a;border-radius:14px}
+@keyframes glow{0%,100%{border-color:#3f3f46;box-shadow:0 0 0 0 rgba(255,255,255,0)}50%{border-color:#fff;box-shadow:0 0 14px 0 rgba(255,255,255,.3)}}
+.animate-glow{animation:glow 2s ease-in-out infinite}
+@keyframes beam{0%{background-position:0% 50%}100%{background-position:300% 50%}}
+.beam-card{padding:1px;border-radius:15px;background:linear-gradient(90deg,#27272a,#fafafa,#27272a,#71717a,#27272a);background-size:300% 100%;animation:beam 7s linear infinite}
+.beam-card>.inner{background:#121216;border-radius:14px}
+@media(prefers-reduced-motion:reduce){.animate-glow,.beam-card{animation:none}}
+#log{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+:focus-visible{outline:2px solid #fff;outline-offset:2px}
+tr.row{cursor:pointer}tr.row:hover td{background:rgba(255,255,255,.03)}
+select,input{background:#050507;border:1px solid #3f3f46;border-radius:10px;padding:.55rem .75rem;width:100%;color:#fff}
+select.sup{padding:.3rem .5rem;font-size:.75rem;max-width:11.5rem;border-radius:8px}
+.btn{border:1px solid #3f3f46;border-radius:10px;padding:.5rem .9rem;font-weight:500;font-size:.875rem;display:inline-flex;gap:.5rem;align-items:center}
+.btn:hover{border-color:#fff}
+.btn-solid{background:#fff;color:#050507;border-color:#fff}.btn-solid:hover{background:#e4e4e7}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+dialog{background:#121216;color:#fff;border:1px solid #3f3f46;border-radius:14px;padding:1.5rem;width:min(30rem,92vw)}
+dialog::backdrop{background:rgba(0,0,0,.7);backdrop-filter:blur(4px)}
+</style>
+</head>
+<body class="font-sans min-h-screen antialiased">
+
+<section id="auth" class="hidden min-h-screen grid place-items-center p-4">
+  <div class="glass w-full max-w-md p-8">
+    <div class="flex items-center gap-2 mb-1"><i data-lucide="boxes" class="w-6 h-6"></i><h1 class="text-2xl font-semibold tracking-tight">SmartStock</h1></div>
+    <p class="text-zinc-400 mb-6">Inventory that forecasts demand and reorders before you run out.</p>
+    <form id="authForm" class="space-y-3" novalidate>
+      <div id="storeWrap" class="hidden"><label class="text-sm text-zinc-400" for="storeName">Store name</label><input id="storeName" autocomplete="organization"></div>
+      <div><label class="text-sm text-zinc-400" for="email">Email</label><input id="email" type="email" autocomplete="email"></div>
+      <div><label class="text-sm text-zinc-400" for="password">Password</label><input id="password" type="password" autocomplete="current-password"></div>
+      <p id="authErr" class="text-sm min-h-5" role="alert"></p>
+      <button id="authSubmit" class="btn btn-solid w-full justify-center" type="submit">Sign in</button>
+    </form>
+    <button id="authToggle" class="mt-4 text-sm text-zinc-400 hover:text-white underline underline-offset-4" type="button">Create a store</button>
+  </div>
+</section>
+
+<main id="app" class="hidden p-4 md:p-8 max-w-7xl mx-auto">
+  <header class="flex flex-wrap items-center justify-between gap-4 mb-6">
+    <div class="flex items-center gap-3"><i data-lucide="boxes" class="w-6 h-6"></i>
+      <div><h1 class="text-xl font-semibold tracking-tight leading-none">SmartStock</h1><p id="storeLabel" class="text-sm text-zinc-400 mt-1"></p></div></div>
+    <div class="flex flex-wrap items-center gap-3">
+      <span class="glass px-3 py-1.5 text-sm flex items-center gap-2" title="Single exponential smoothing, alpha 0.35"><span id="mlDot" class="w-2 h-2 rounded-full bg-white"></span><span id="mlState">Forecast engine ready</span></span>
+      <button id="runBtn" class="btn btn-solid"><i data-lucide="sparkles" class="w-4 h-4"></i>Run forecast</button>
+      <button id="recvBtn" class="btn"><i data-lucide="package-check" class="w-4 h-4"></i>Receive orders</button>
+      <button id="addBtn" class="btn"><i data-lucide="plus" class="w-4 h-4"></i>Add product</button>
+      <button id="outBtn" class="btn" aria-label="Sign out"><i data-lucide="log-out" class="w-4 h-4"></i></button>
+    </div>
+  </header>
+
+  <section id="metrics" class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6"></section>
+
+  <div class="grid lg:grid-cols-3 gap-6">
+    <div class="lg:col-span-2 space-y-6">
+      <section class="glass p-5">
+        <h2 class="font-semibold mb-3">Product inventory</h2>
+        <div class="overflow-x-auto"><table class="w-full text-sm">
+          <thead class="text-zinc-400 text-left"><tr><th class="py-2 pr-3 font-medium">Product</th><th class="pr-3 font-medium">SKU</th><th class="pr-3 font-medium text-right">Stock</th><th class="pr-3 font-medium text-right">Price</th><th class="pr-3 font-medium">Supplier</th><th class="font-medium">Reorder status</th></tr></thead>
+          <tbody id="rows"></tbody></table></div>
+      </section>
+      <section class="glass p-5">
+        <div class="flex items-baseline justify-between mb-3"><h2 class="font-semibold">Demand: <span id="chartName" class="text-zinc-300"></span></h2><p id="chartNote" class="text-sm text-zinc-400"></p></div>
+        <div id="chartBox" class="h-64"><canvas id="chart" aria-label="Daily units sold and 7-day forecast"></canvas></div>
+        <div id="noHist" class="hidden h-64 grid place-items-center text-center">
+          <div><p class="text-zinc-400 mb-3">No sales history yet, so the forecast has nothing to learn from.</p>
+          <button id="histBtn" class="btn btn-solid mx-auto"><i data-lucide="history" class="w-4 h-4"></i>Load 30 days of sample sales</button></div></div>
+      </section>
+    </div>
+
+    <div class="space-y-6">
+      <div class="beam-card"><section class="inner p-5">
+        <h2 class="font-semibold mb-3">Checkout</h2>
+        <label class="text-sm text-zinc-400" for="posProduct">Product</label><select id="posProduct" class="mb-3"></select>
+        <div class="flex gap-2 mb-3"><div class="flex-1"><label class="text-sm text-zinc-400" for="posQty">Quantity</label><input id="posQty" type="number" min="1" value="1"></div>
+          <button id="cartBtn" class="btn self-end"><i data-lucide="plus" class="w-4 h-4"></i>Add</button></div>
+        <ul id="cart" class="text-sm divide-y divide-zinc-800 mb-3"></ul>
+        <dl class="text-sm space-y-1 mb-4"><div class="flex justify-between"><dt class="text-zinc-400">Total</dt><dd id="posTotal" class="tabular-nums">₹0.00</dd></div><div class="flex justify-between"><dt class="text-zinc-400">Gross margin</dt><dd id="posMargin" class="tabular-nums">0%</dd></div></dl>
+        <button id="sellBtn" class="btn btn-solid w-full justify-center"><i data-lucide="shopping-cart" class="w-4 h-4"></i>Complete sale</button>
+        <p id="posErr" class="text-sm mt-2 min-h-5" role="alert"></p>
+      </section></div>
+      <section class="glass p-5">
+        <h2 class="font-semibold mb-3">Procurement log</h2>
+        <div id="log" class="h-72 overflow-y-auto text-xs leading-relaxed space-y-1 pr-1" aria-live="polite"></div>
+      </section>
+    </div>
+  </div>
+</main>
+
+<dialog id="prodDlg">
+  <form id="prodForm" class="space-y-3" novalidate>
+    <h2 class="text-lg font-semibold">Add product</h2>
+    <div><label class="text-sm text-zinc-400" for="fName">Name</label><input id="fName"></div>
+    <div class="grid grid-cols-2 gap-3">
+      <div><label class="text-sm text-zinc-400" for="fSku">SKU</label><input id="fSku"></div>
+      <div><label class="text-sm text-zinc-400" for="fCat">Category</label><select id="fCat"></select></div>
+      <div><label class="text-sm text-zinc-400" for="fPrice">Selling price</label><input id="fPrice" type="number" min="0" step="0.01"></div>
+      <div><label class="text-sm text-zinc-400" for="fCost">Cost price</label><input id="fCost" type="number" min="0" step="0.01"></div>
+      <div><label class="text-sm text-zinc-400" for="fStock">Opening stock</label><input id="fStock" type="number" min="0" value="0"></div>
+      <div><label class="text-sm text-zinc-400" for="fThr">Reorder threshold</label><input id="fThr" type="number" min="0" value="5"></div>
+    </div>
+    <div><label class="text-sm text-zinc-400" for="fSup">Supplier</label><select id="fSup"></select></div>
+    <p id="fErr" class="text-sm min-h-5" role="alert"></p>
+    <div class="flex justify-end gap-2"><button type="button" id="fCancel" class="btn">Cancel</button><button type="submit" class="btn btn-solid">Save product</button></div>
+  </form>
+</dialog>
+
+<script>
+const $=s=>document.querySelector(s);
+const inr=new Intl.NumberFormat('en-IN',{style:'currency',currency:'INR',maximumFractionDigits:2});
+const money=n=>inr.format(n);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let token=localStorage.getItem('ss_token'), products=[], cats=[], sups=[], selected=null, chart=null, registerMode=false, cart=[], salesCount=0;
+
+async function api(path,opt={}){
+  const r=await fetch('/api'+path,{...opt,headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{}),...(opt.headers||{})}});
+  const d=await r.json().catch(()=>({}));
+  if(r.status===401&&token){signOut();throw new Error('Session expired. Sign in again.')}
+  if(!r.ok)throw new Error(typeof d.detail==='string'?d.detail:'Check the fields and try again.');
+  return d;
+}
+const icons=()=>window.lucide&&lucide.createIcons();
+
+/* ---------- auth ---------- */
+function showAuth(){ $('#app').classList.add('hidden'); $('#auth').classList.remove('hidden'); icons(); }
+function signOut(){ token=null; localStorage.removeItem('ss_token'); cart=[]; selected=null; showAuth(); }
+function setMode(reg){ registerMode=reg; $('#storeWrap').classList.toggle('hidden',!reg);
+  $('#authSubmit').textContent=reg?'Create store':'Sign in'; $('#authToggle').textContent=reg?'I already have an account':'Create a store'; $('#authErr').textContent=''; }
+$('#authToggle').onclick=()=>setMode(!registerMode);
+$('#authForm').onsubmit=async e=>{
+  e.preventDefault(); $('#authErr').textContent='';
+  const email=$('#email').value.trim(), password=$('#password').value; let t;
+  try{
+    if(registerMode) t=(await api('/auth/register',{method:'POST',body:JSON.stringify({store_name:$('#storeName').value.trim(),email,password})})).access_token;
+    else{ const r=await fetch('/api/auth/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({username:email,password})});
+      const d=await r.json(); if(!r.ok)throw new Error(d.detail||'Email or password is incorrect'); t=d.access_token; }
+    token=t; localStorage.setItem('ss_token',t); await boot();
+  }catch(err){ $('#authErr').textContent=err.message; }
+};
+
+/* ---------- rendering ---------- */
+function renderMetrics(m){
+  const cards=[['Total revenue',money(m.revenue),'banknote'],['Gross profit',money(m.gross_profit)+` <span class="text-sm text-zinc-400 font-normal">${m.margin_pct}%</span>`,'trending-up'],
+    ['Active SKUs',m.active_skus,'layers'],['Low stock alerts',m.low_stock,'triangle-alert']];
+  $('#metrics').innerHTML=cards.map(([l,v,i],idx)=>`<div class="glass p-4 ${idx===3&&m.low_stock>0?'animate-glow':''}">
+    <div class="flex items-center justify-between text-zinc-400 text-sm"><span>${l}</span><i data-lucide="${i}" class="w-4 h-4"></i></div>
+    <div class="text-xl sm:text-2xl font-semibold mt-2 tabular-nums">${v}</div></div>`).join('');
+}
+function badge(p){
+  const cover=p.days_of_cover!=null?`, ${p.days_of_cover} days left`:'';
+  if(p.open_po) return `<span class="inline-flex rounded-full border border-zinc-500 px-2.5 py-0.5 text-xs whitespace-nowrap">PO #${p.open_po.id} ordered (${p.open_po.quantity})</span>`;
+  if(p.status==='critical') return `<span class="inline-flex rounded-full bg-white text-black px-2.5 py-0.5 text-xs font-semibold whitespace-nowrap">Reorder now: ${p.suggested_qty}</span>`;
+  if(p.status==='watch') return `<span class="inline-flex rounded-full border border-zinc-500 text-zinc-300 px-2.5 py-0.5 text-xs whitespace-nowrap">Watch${cover}</span>`;
+  return `<span class="text-zinc-500 text-xs whitespace-nowrap">Healthy${cover}</span>`;
+}
+function supOptions(p){
+  const auto=p.supplier&&!p.supplier_id?`Auto: ${p.supplier}`:'No supplier';
+  return `<option value="">${esc(auto)}</option>`+sups.map(s=>`<option value="${s.id}" ${s.id===p.supplier_id?'selected':''}>${esc(s.name)}</option>`).join('');
+}
+function renderRows(){
+  $('#rows').innerHTML=products.length?products.map(p=>`<tr class="row border-t border-zinc-800 ${selected===p.id?'bg-white/5':''}" data-id="${p.id}" tabindex="0">
+    <td class="py-3 pr-3"><div class="font-medium">${esc(p.name)}</div><div class="text-xs text-zinc-500">${esc(p.category||'Uncategorised')}</div></td><td class="pr-3 text-zinc-400">${esc(p.sku)}</td>
+    <td class="pr-3 text-right tabular-nums"><span class="${p.status==='critical'&&!p.open_po?'animate-glow inline-block border rounded-md px-2':''}">${p.stock}</span></td>
+    <td class="pr-3 text-right tabular-nums">${money(p.price)}</td>
+    <td class="pr-3"><select class="sup" data-id="${p.id}" aria-label="Supplier for ${esc(p.name)}">${supOptions(p)}</select></td><td>${badge(p)}</td></tr>`).join('')
+    :`<tr><td colspan="6" class="py-8 text-center text-zinc-400">No products yet. Add your first product to start tracking stock.</td></tr>`;
+  document.querySelectorAll('tr.row').forEach(tr=>{const go=()=>selectProduct(+tr.dataset.id); tr.onclick=go; tr.onkeydown=e=>{if(e.key==='Enter'&&e.target===tr)go()}});
+  document.querySelectorAll('select.sup').forEach(s=>{s.onclick=e=>e.stopPropagation();
+    s.onchange=async()=>{try{await api('/products/'+s.dataset.id,{method:'PATCH',body:JSON.stringify({supplier_id:s.value?+s.value:null})});await refresh()}catch(e){alert(e.message)}}});
+  const cur=$('#posProduct').value;
+  $('#posProduct').innerHTML=products.map(p=>`<option value="${p.id}" ${p.stock<1?'disabled':''}>${esc(p.name)} (${p.stock} in stock)</option>`).join('');
+  if(cur)$('#posProduct').value=cur;
+}
+function renderCart(){
+  const lines=cart.map(c=>({...c,p:products.find(x=>x.id===c.id)})).filter(c=>c.p);
+  $('#cart').innerHTML=lines.map(c=>`<li class="flex items-center justify-between py-2 gap-2"><span>${c.qty} x ${esc(c.p.name)}</span>
+    <span class="flex items-center gap-2 tabular-nums">${money(c.qty*c.p.price)}<button class="text-zinc-500 hover:text-white" data-rm="${c.id}" aria-label="Remove ${esc(c.p.name)}"><i data-lucide="x" class="w-4 h-4"></i></button></span></li>`).join('');
+  const rev=lines.reduce((s,c)=>s+c.qty*c.p.price,0), cost=lines.reduce((s,c)=>s+c.qty*c.p.cost,0);
+  $('#posTotal').textContent=money(rev); $('#posMargin').textContent=(rev?((rev-cost)/rev*100):0).toFixed(1)+'%';
+  document.querySelectorAll('[data-rm]').forEach(b=>b.onclick=()=>{cart=cart.filter(c=>c.id!==+b.dataset.rm);renderCart()}); icons();
+}
+function renderLog(rows){
+  const el=$('#log'), stick=el.scrollTop+el.clientHeight>=el.scrollHeight-20, mark={sale:'-',po:'+',info:'>'};
+  el.innerHTML=rows.map(r=>`<div class="${r.level==='po'?'text-white':'text-zinc-400'}"><span class="text-zinc-600">${new Date(r.created_at+'Z').toLocaleTimeString([],{hour12:false})}</span> ${mark[r.level]||'>'} ${esc(r.message)}</div>`).join('');
+  if(stick)el.scrollTop=el.scrollHeight;
+}
+async function selectProduct(id){
+  selected=id; renderRows(); const p=products.find(x=>x.id===id); if(!p)return;
+  $('#chartName').textContent=p.name;
+  $('#noHist').classList.toggle('hidden',salesCount>0); $('#chartBox').classList.toggle('hidden',salesCount===0);
+  if(salesCount===0){ $('#chartNote').textContent=`Reorder threshold ${p.threshold} units`; return; }
+  $('#chartNote').textContent=`Forecast ${p.daily_forecast} units/day, ${p.forecast_7d} over 7 days`;
+  const f=await api(`/products/${id}/forecast`);
+  const labels=[...f.labels,...f.forecast_labels], hist=[...f.history,...f.forecast.map(()=>null)];
+  const fc=[...f.history.map((v,i)=>i===f.history.length-1?v:null),...f.forecast];
+  if(chart)chart.destroy();
+  Chart.defaults.color='#a1a1aa'; Chart.defaults.font.family='Schibsted Grotesk, system-ui, sans-serif';
+  chart=new Chart($('#chart'),{type:'line',data:{labels,datasets:[
+    {label:'Units sold',data:hist,borderColor:'#fff',backgroundColor:'rgba(255,255,255,.08)',fill:true,tension:.3,pointRadius:0,borderWidth:2},
+    {label:'7-day forecast',data:fc,borderColor:'#a1a1aa',borderDash:[6,5],pointRadius:0,borderWidth:2}]},
+    options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},
+      scales:{x:{grid:{color:'#1f1f23'},ticks:{maxTicksLimit:8}},y:{beginAtZero:true,grid:{color:'#1f1f23'}}},plugins:{legend:{labels:{boxWidth:12}}}}});
+}
+
+/* ---------- data flow ---------- */
+async function refresh(){
+  const [m,p,l,c,s]=await Promise.all([api('/metrics'),api('/products'),api('/activity'),api('/categories'),api('/suppliers')]);
+  products=p; cats=c; sups=s; salesCount=m.sales_count; renderMetrics(m); renderRows(); renderCart(); renderLog(l); icons();
+  if(!products.some(x=>x.id===selected)) selected=(products.find(x=>x.status==='critical')||products[0]||{}).id||null;
+  if(selected) await selectProduct(selected);
+}
+function engine(text,busy=false,reset=true){ $('#mlState').textContent=text; $('#mlDot').className='w-2 h-2 rounded-full bg-white '+(busy?'animate-pulse':'');
+  if(reset&&!busy) setTimeout(()=>{$('#mlState').textContent='Forecast engine ready'},3500); }
+
+$('#runBtn').onclick=async()=>{ $('#runBtn').disabled=true; engine('Forecasting demand...',true);
+  try{ const r=await api('/ml/run',{method:'POST'}); await refresh(); engine(r.orders_created?`${r.orders_created} order(s) raised`:'No orders needed'); }
+  catch(e){ engine(e.message) } finally{ $('#runBtn').disabled=false; } };
+$('#recvBtn').onclick=async()=>{ try{ const r=await api('/purchase-orders/receive-all',{method:'POST'}); await refresh(); engine(`${r.received} order(s) received`); }catch(e){engine(e.message)} };
+$('#histBtn').onclick=async()=>{ try{ engine('Loading sample sales...',true); await api('/demo/history',{method:'POST'}); await refresh(); engine('Sample sales loaded'); }catch(e){engine(e.message)} };
+$('#outBtn').onclick=signOut;
+
+$('#cartBtn').onclick=()=>{
+  $('#posErr').textContent=''; const id=+$('#posProduct').value, p=products.find(x=>x.id===id); if(!p)return;
+  const qty=Math.max(1,parseInt($('#posQty').value)||1), have=(cart.find(c=>c.id===id)||{}).qty||0;
+  if(have+qty>p.stock){ $('#posErr').textContent=`Only ${p.stock} of ${p.name} in stock`; return; }
+  const line=cart.find(c=>c.id===id); line?line.qty+=qty:cart.push({id,qty}); renderCart();
+};
+$('#sellBtn').onclick=async()=>{
+  $('#posErr').textContent=''; if(!cart.length){ $('#posErr').textContent='Add a product to the cart first'; return; }
+  $('#sellBtn').disabled=true;
+  try{ const r=await api('/sales',{method:'POST',body:JSON.stringify({items:cart.map(c=>({product_id:c.id,quantity:c.qty}))})});
+    cart=[]; await refresh(); engine(r.purchase_orders.length?`PO #${r.purchase_orders.join(', #')} raised`:`Sale #${r.sale_id} complete`);
+  }catch(e){ $('#posErr').textContent=e.message } finally{ $('#sellBtn').disabled=false; } };
+
+/* add product */
+$('#addBtn').onclick=()=>{ $('#prodForm').reset(); $('#fErr').textContent='';
+  $('#fCat').innerHTML=`<option value="">None</option>`+cats.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
+  $('#fSup').innerHTML=`<option value="">Auto by category</option>`+sups.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('');
+  $('#prodDlg').showModal(); $('#fName').focus(); };
+$('#fCancel').onclick=()=>$('#prodDlg').close();
+$('#prodForm').onsubmit=async e=>{ e.preventDefault(); $('#fErr').textContent='';
+  try{ const p=await api('/products',{method:'POST',body:JSON.stringify({product_name:$('#fName').value.trim(),sku:$('#fSku').value.trim(),
+      selling_price:+$('#fPrice').value,cost_price:+$('#fCost').value||0,current_stock:parseInt($('#fStock').value)||0,reorder_threshold:parseInt($('#fThr').value)||0,
+      category_id:$('#fCat').value?+$('#fCat').value:null,supplier_id:$('#fSup').value?+$('#fSup').value:null})});
+    $('#prodDlg').close(); selected=p.id; await refresh();
+  }catch(err){ $('#fErr').textContent=err.message } };
+
+async function boot(){
+  try{ const me=await api('/me'); $('#storeLabel').textContent=me.store_name+' · '+me.email;
+    $('#auth').classList.add('hidden'); $('#app').classList.remove('hidden'); await refresh();
+  }catch(e){ showAuth() }
+}
+window.addEventListener('load',()=>{ icons(); token?boot():showAuth(); });
+</script>
+</body>
+</html>
