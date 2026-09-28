@@ -12,6 +12,24 @@ from sqlalchemy.orm import Session, joinedload
 
 from . import __version__, auth, demo, importer, ml_engine, models, schemas
 from .database import Base, SessionLocal, engine, get_db
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI()
+
+origins = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "https://ismartstockapp.netlify.app",  # <--- PASTE YOUR NETLIFY URL HERE
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 LEAD_DAYS = int(os.getenv("SMARTSTOCK_LEAD_DAYS", "3"))  # the dump has no supplier lead time column
 
